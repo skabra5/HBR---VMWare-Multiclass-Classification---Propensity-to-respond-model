@@ -1,0 +1,1024 @@
+---
+title: "Homework 3"
+author: "Sakshi Kabra"
+date: "11/11/2019"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+library(MASS)
+library(class)
+library(dplyr)
+library(ggplot2)
+library(randomForest)
+library(tidyr)
+library(LiblineaR)
+library(ROCR)
+library(DMwR)
+library(caret)
+library(tidyverse)
+
+
+```
+
+
+```{r}
+
+train <- read.csv("Training.csv")
+validation <- read.csv("Validation.csv")
+
+```
+
+
+```{r}
+
+full_data <- rbind(train, validation)
+full_data$target <- as.factor(full_data$target)
+
+```
+
+
+```{r}
+
+#Drop variables with all empty values
+
+full_data <- full_data %>% select_if(function(x){!all(is.na(x))})
+
+
+#remove variables which have more than, for example, 70% missing values
+nm <- names(full_data)[colMeans(is.na(full_data))>0.7]
+full_data <- full_data %>% dplyr::select(-nm)
+
+
+```
+
+
+
+
+```{r}
+#Removing columns that have a single value in all rows, thus these variables do not contribute to the variance in data.  
+
+full_data <- Filter(function(x)(length(unique(x))>1), full_data)
+
+
+```
+
+
+```{r}
+
+# how many columns remaning having missing values
+missing_value_col <- names(colMeans(is.na(full_data))[colMeans(is.na(full_data))>0])
+missing_value_col
+
+
+```
+
+
+
+
+
+
+```{r}
+
+# Replacing missing values in categorical variables with class "missing"
+
+full_nums <- dplyr::select_if(full_data, is.numeric)
+full_cat <- dplyr::select_if(full_data, is.factor)
+
+str1 = as.character(full_cat$db_industry)
+str1 = ifelse(is.na(str1),"missing",str1)
+full_cat$db_industry = as.factor(str1)
+
+str2 = as.character(full_cat$db_city)
+str2 = ifelse(is.na(str2),"missing",str2)
+full_cat$db_city = as.factor(str2)
+
+str3 = as.character(full_cat$db_companyname)
+str3 = ifelse(is.na(str3),"missing",str3)
+full_cat$db_companyname = as.factor(str3)
+
+str4 = as.character(full_cat$db_country)
+str4 = ifelse(is.na(str4),"missing",str4)
+full_cat$db_country = as.factor(str4)
+
+str5 = as.character(full_cat$db_state)
+str5 = ifelse(is.na(str5),"missing",str5)
+full_cat$db_state = as.factor(str5)
+
+str6 = as.character(full_cat$db_employeerange)
+str6 = ifelse(is.na(str6),"missing",str6)
+full_cat$db_employeerange = as.factor(str6)
+
+str7 = as.character(full_cat$db_audience)
+str7 = ifelse(is.na(str7),"missing",str7)
+full_cat$db_audience = as.factor(str7)
+
+str8 = as.character(full_cat$db_subindustry)
+str8 = ifelse(is.na(str8),"missing",str8)
+full_cat$db_subindustry = as.factor(str8)
+
+str9 = as.character(full_cat$gu_emp_segment_desc)
+str9 = ifelse(is.na(str9),"missing",str9)
+full_cat$gu_emp_segment_desc = as.factor(str9)
+
+str10 = as.character(full_cat$idc_verticals)
+str10 = ifelse(is.na(str10),"missing",str10)
+full_cat$idc_verticals = as.factor(str10)
+
+full_data <- cbind(full_nums,full_cat)
+
+```
+
+
+
+
+```{r}
+# Replacing missing values in the data with 0's as the NAs might represent that there was no sale in that instance.  
+
+fd <- full_data
+
+fd$db_annualsales[is.na(fd$db_annualsales)] <- 0
+
+```
+
+
+
+
+```{r}
+
+# Splitting the data again into train and test:
+
+traindat <- fd[1:50006,]
+testdat <- fd[50007:100012,]
+
+```
+
+
+
+```{r}
+
+# Balancing the train data using SMOTE function from DMwR library. SMOTE uses K-nearest neighbour method to generate new samples, as to increase the minority class rows and decrease the majority class rows in the data. 
+
+traindat <- traindat %>% mutate(dummy.target = case_when (
+                           target %in% 0 ~ "0",
+                           target %in% 1:5 ~ "1" ))
+
+traindat$dummy.target <- as.factor(traindat$dummy.target)
+
+td <- traindat
+
+library(DMwR)
+
+## Smote : Synthetic Minority Oversampling Technique To Handle Class Imbalancy In Binary Classification
+
+balanced.data <- SMOTE(dummy.target ~., td, perc.over = 1000 , k = 5, perc.under = 300)
+
+as.data.frame(table(balanced.data$dummy.target))
+
+summary(balanced.data$target)
+
+```
+
+  
+```{r}
+
+# Joining the Balanced Data with test data, for further variable reduction:
+
+balanced.data <- balanced.data %>% dplyr::select(-dummy.target)
+
+new.fullData <- rbind(balanced.data, testdat)
+
+```
+
+
+```{r}
+
+new.fd <- new.fullData
+
+fd_nums <- dplyr::select_if(new.fd, is.numeric)
+fd_cat <- dplyr::select_if(new.fd, is.factor)
+
+sapply(full_cat, function(x) length(unique(x)))
+
+#We remove variables that have number of classes more than 100.
+
+drop.cat <- c("db_city","db_companyname", "db_country", "db_state", "db_subindustry", "db_audience")
+
+new.fd  <- new.fd[, !names(new.fd) %in% drop.cat]
+
+```
+
+
+
+
+```{r}
+
+# One hot encoding for remaining categorical variables, i.e., we convert these variables into dummy numeric (0/1) variables, by converting each class as a variable itself.  
+
+library(caret)
+
+fd1_nums <- dplyr::select_if(new.fd, is.numeric)
+fd1_cat  <- dplyr::select_if(new.fd, is.factor)
+
+var_onehot <- c('db_industry','db_employeerange','gu_emp_segment_desc','idc_verticals')
+
+# One Hot Encoding
+dummy <- dummyVars(" ~ .", data = fd1_cat[,var_onehot])
+dummy_cat <- data.frame(predict(dummy, newdata = fd1_cat[,var_onehot]))
+
+new.fd <- cbind(fd1_nums,dummy_cat,fd1_cat$target)
+
+names(new.fd)[names(new.fd) =="fd1_cat$target"] <- "target"
+
+```
+
+ 
+
+```{r}
+
+#Random Forest for variable reduction:
+
+#We will run Random Forest model on the dataset with 582 variables and check the importance scores for each using the importance function. 
+
+fd1 <- new.fd
+
+fullrf <- (randomForest(target ~ .-target, data = fd1, na.action = na.roughfix))
+
+importance <- importance(fullrf, type = 2)
+
+varImportance <- data.frame(Variables = row.names(importance), 
+                            Importance = round(importance[ ,'MeanDecreaseGini'],2))
+
+varImportance <- varImportance[order((varImportance$Importance),decreasing = TRUE), ]
+
+#important variables on the basis of Mean Decrease Gini
+impvar <- varImportance %>% 
+                  filter(varImportance$Importance >=4)
+
+#Unimportant variables on basis of Mean Decrease Gini
+unimpvar <- varImportance %>% 
+                  filter(varImportance$Importance < 4)
+
+#list of unimportant variables from dataset "unimpvar"
+removevar <- unique(c(as.character(unimpvar$Variables)))
+
+#removing the variables that are found less important from the Random Forest Model, from full_data 
+fd1 <- dplyr::select(fd1, -(removevar))
+
+write.csv(fd1, "randforestOutput.csv")
+
+```
+
+ 
+
+
+```{r}
+
+# After random Forest the number of variables are reduced to 241, these variables are selected on the basis of Mean Decrease Gini values obtained from Random Forest.  
+
+fd1 <- read.csv("randforestOutput.csv")
+fd1$target <- as.factor(fd1$target)
+
+
+```
+
+
+
+```{r}
+
+set.seed(101)
+
+fdlib <- fd1
+
+library(LiblineaR)
+library(ROCR)
+
+# Adding predictors(X)and Response variable(Y), in separate dataframes
+
+fd.x <- fdlib[,1:240]
+fd.y <- fdlib[,241]
+
+# We need to normalize data before running LiblineaR
+# To normalize data, you can use scale(data, center, scale) function.
+# The formula newx = (x-center)/scale is used in this function. 
+
+# Normalizing data
+fd.x <- scale(fd.x,center=TRUE,scale=TRUE)
+
+tryCosts1 <- seq(0.01, 0.1, by=0.01)
+bestCost1 <- NA
+
+  for(co1 in tryCosts1){
+
+# Lasso: Type = 6, running model using LiblineaR
+lasso.model <- LiblineaR(data = fd.x,
+                              target = fd.y, 
+                              type = 6,
+                              cost = co1)
+lassoCoef <- lasso.model$W
+W.drop <- lassoCoef[,colSums(lassoCoef) ==0]
+numCol <- ncol(W.drop)
+lassoDrop.var <- colnames(W.drop)
+
+cat("Results for C=",co1," : ", "number of colums to drop = ",numCol,":", "and columns to be dropped are",(lassoDrop.var),"\n",sep="")
+
+}
+
+
+
+
+```
+
+
+
+
+```{r}
+
+# **LASSO for variable reduction:** Lasso is a sparsifying variant of Logistic Regression that shrinks the coefficients of less important variables towards zero and forces them to be zero for un-important variables.
+# Based on the findings above, we choose Cost to be 0.05, for reducing less important variables. A small cost means a bigger lambda (penalty), which results in more sparse model.
+
+
+set.seed(101)
+lasso.model.drop <- LiblineaR(data = fd.x,
+                              target = fd.y, 
+                              type = 6,
+                              cost = 0.05)
+lassoCoef.drop <- lasso.model.drop$W
+W.drop.drop <- lassoCoef.drop[,colSums(lassoCoef.drop) ==0]
+numCol.drop <- ncol(W.drop.drop)
+lassoDrop.var.drop <- colnames(W.drop.drop)
+
+
+reduced.lasso.data <- fdlib %>% dplyr::select(-lassoDrop.var.drop)
+
+
+
+```
+
+     
+
+```{r}
+
+# After Lasso, we remain with 130 variables.  
+
+
+# **Correlation for Variable Reduction:** Removing highly correlated variable using findCorrelation function. We check the correations between variables and remove the ones that have >0.9 correlation coefficient.
+
+fd2 <- reduced.lasso.data
+
+fd2_cat <- dplyr::select_if(fd2, is.factor)
+fd2_nums <- dplyr::select_if(fd2, is.numeric)
+
+library(caret)
+
+zv <- apply(fd2_nums, 2, function(x) length(unique(x)) == 1)
+dfr <- fd2_nums[, !zv]
+n=length(colnames(dfr))
+
+correlationMatrix <- cor(dfr[,1:n],use="complete.obs")
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=(0.9),verbose = FALSE)
+
+fd2 <- fd2[,-highlyCorrelated]
+
+```
+
+
+
+
+
+```{r}
+
+# After correlation, we remain with 105 most important variables from the dataset and we apply our models on this new data. We divide the data into train and test as below:  
+
+
+cleanData <- fd2
+cleanData <- cleanData %>% select(-flag_train)
+vmwTrain <- cleanData[1:54776,]
+vmwTest <- cleanData[54777:104782,]
+
+write.csv(cleanData, "cleanData.csv")
+
+
+```
+
+
+
+
+
+```{r}
+
+# Problem 5, part f
+
+# Use the sample data provided to develop a Random Forest model. Comment on the model development and accuracy of the model.
+
+
+# Step 1: Cross Validation for best mtry and ntree  
+
+rfTrain <- vmwTrain
+rfTest <- vmwTest
+
+library(randomForest)
+library(caret)
+
+set.seed(101) 
+vmware_rf <- list(type = "Classification", library = "randomForest", loop = NULL) 
+
+vmware_rf$parameters <- data.frame(parameter = c("mtry", "ntree"), class = rep("numeric", 2), label = c("mtry", "ntree"))
+
+vmware_rf$grid <- function(x, y, len = NULL, search = "grid") {}
+vmware_rf$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) 
+  { 
+  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, ...) 
+  }
+
+vmware_rf$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL) predict(modelFit, newdata)
+
+vmware_rf$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL) 
+  
+  predict(modelFit, newdata, type = "prob")
+
+vmware_rf$sort <- function(x) x[order(x[,1]),] 
+
+vmware_rf$levels <- function(x) x$classes 
+
+control <- trainControl(method="cv", number=5) 
+tunegrid <- expand.grid(.mtry=c(11:15), .ntree=c(100,200,500))
+
+set.seed(111) 
+
+vmwRF <- train(target ~.-target, data=rfTrain,
+                   method=vmware_rf, metric="Accuracy",
+                   tuneGrid=tunegrid, trControl=control) 
+
+plot(vmwRF)
+
+summary(vmRF)
+
+
+```
+
+  
+
+```{r}
+
+# Cross Validation on complete dataset to get the generalization error:
+
+RFdata <- cleanData
+rfTrain <- vmwTrain
+rfTest <- vmwTest
+
+library(e1071)
+library(pROC)
+
+library(randomForest)
+library(caret)
+library(AUC)
+
+k1 = 5
+
+for (i in 1:k1) {
+
+
+n = floor(nrow(cleanData)/k1)
+recall.vect = rep(NA,k1)
+AccRF <- NA
+RecallRF <- NA
+  
+  s1 = ((i-1) * n+1)
+  s2 = (i*n)
+  subset = s1:s2
+  
+  rfcv.train = RFdata[-subset,]
+  rfcv.test = RFdata[subset,]
+
+  tuned.RandForest <- randomForest(target~.-target, data = rfcv.train, mtry = 14, ntree = 100 ) 
+
+  tuned.RF.pred <- predict(tuned.RandForest, newdata = rfcv.test, type = "class")
+  
+  recall.vect[i] <- (confusionMatrix(tuned.RF.pred, rfcv.test$target))$byClass[, "Sensitivity"]
+
+ print(paste("Recall / Sensitivity for fold", i, ":", recall.vect[i]))
+  
+    }
+
+print(paste(" Average Recall / Sensitivity :", mean(recall.vect[[i]])))
+
+
+#AUC::auc(roc(rfcv.test$target , (cv.RF.pred)))
+
+#AccRF[i] <- (confusionMatrix(tuned.RF.pred, rfcv.test$target))$overall["Accuracy"]
+
+```
+
+
+
+
+```{r}
+
+# Retrain the model with best parameters and checking the performance measures like Recall, Precision, Accuracy on the test data.
+
+library(randomForest)
+library(mlbench)
+library(caret)
+library(e1071)
+ 
+set.seed(123)
+
+#Retraining the model with best values of mtry and ntree
+
+RF.tuned <- randomForest(target~. -target, 
+                      data=rfTrain, 
+                      importance = TRUE, 
+                      mtry = 14,
+                      ntree = 100)
+print(RF.tuned)
+plot(RF.tuned)
+
+
+# Making final prediction on test data
+
+RFtest.pred <- predict(RF.tuned, newdata= rfTest, type = "prob")
+
+confusionMatrix(predict(RF.tuned, newdata= rfTest, type = "class"),
+                rfTest$target)
+
+
+```
+
+Following are the results from running the best Random Forest model on Test data:
+
+Accuracy of the Model: 99.95%
+Out of Bag Error Rate: 5.82%
+Class Errors in Test data Prediction:
+Class 0: ~0
+Class 1: 0
+Class 2: 22.22%
+Class 3: 87.5%
+Class 4: 4.44%
+Class 5: 0
+
+Recall/Sensitivity:  
+Class 0: 1  
+Class 1: 1  
+Class 2: 0.22  
+Class 3: 0.125  
+Class 4: 0.95  
+Class 5: 1  
+
+The model results are very good and that is due to the Boostrap Aggregation approach of Random Forest model.
+
+
+
+
+
+
+```{r}
+
+# Problem 2, Part g.) How different are regularized logistic regression models from standard logistic regression models? When should L1, L2 regularization be used to model the data? Develop a regularized Logistic Regression model on given data. What insights do you obtain from this model? 
+
+#cleanData <- read.csv("cleanData.csv")
+#summary(cleanData)
+liblinearData <- cleanData
+
+#na.omit(liblinearData) 
+
+liblinearTrain <- liblinearData[1:54776,]
+liblinearTest <- liblinearData[54777:104782,]
+
+
+
+
+```
+
+
+
+
+```{r}
+
+# *Parameter Tuning for Logistic Regression*: We start with finidng the best parameter values for cost and type, using cross validation.
+
+library(LiblineaR)
+xTrain.LR <- liblinearTrain[,1:103]
+yTrain.LR <- liblinearTrain[,104]
+yTrain.LR <- as.factor(yTrain.LR)
+
+xTest.LR <- liblinearTest[,1:103]
+yTest.LR <- liblinearTest[,104]
+yTest.LR <- as.factor(yTest.LR)
+
+# Scale Train data
+xTrain.LR <- scale(xTrain.LR,center=TRUE,scale=TRUE)
+# Scale the test data
+xTest.LR <- scale(xTrain.LR,attr(xTrain.LR,"scaled:center"),
+                   attr(xTrain.LR,"scaled:scale"))
+
+
+# Find the best model with the best cost parameter via 5-fold cross-validations
+tryTypes <- c(0,6,7)
+tryCosts <- c(10,0.1,0.001)
+bestCost <- NA
+bestAcc <- 0
+bestType <- NA
+
+for(ty in tryTypes){
+  for(co in tryCosts){
+    best.LR <- LiblineaR(data= xTrain.LR, target= yTrain.LR, type=ty, cost=co,cross=2, verbose=FALSE)
+    
+    
+    
+    cat("Results for type = ",ty," : Cost = ",co," : ",best.LR," accuracy.\n",sep="")
+    if(best.LR > bestAcc){
+      bestAcc <- best.LR
+      bestCost <- co
+      bestType <- ty
+    }
+  }
+}
+
+cat("Best model type is:",bestType,"\n")
+cat("Best cost is:",bestCost,"\n")
+cat("Best accuracy is:",bestAcc,"\n")
+
+
+
+
+```
+
+
+
+```{r}
+# Type = 7 -- L2-regularized logistic regression
+
+LR.model <- LiblineaR(data = xTrain.LR,
+                              target = yTrain.LR, 
+                              type = 7,
+                              cost = 10)
+
+# Make prediction
+LR.pred <- predict(LR.model, xTest.LR)
+
+LR.pred$predictions <- as.factor(LR.pred$predictions)
+
+# Display confusion matrix
+
+LR.res <- confusionMatrix((LR.pred$predictions),(yTest.LR))
+print(LR.res)
+
+
+
+```
+
+
+```{r}
+
+# type = 6: L1-regularized logistic regression -- LASSO
+
+lasso.model <- LiblineaR(data = xTrain.LR,
+                              target = yTrain.LR, 
+                              type = 6,
+                              cost = 0.1)
+
+# Make prediction
+lasso.pred <- predict(lasso.model,xTest.LR)
+lasso.pred
+
+lasso.pred$predictions <- as.factor(lasso.pred$predictions)
+
+# Display confusion matrix
+lasso.res <- table(lasso.pred$predictions,yTest.LR)
+print(lasso.res)
+
+```
+
+
+
+```{r}
+# type = 0: L2-regularized logistic regression -- RIDGE
+
+ridge.model <- LiblineaR(data = xTrain.LR,
+                              target = yTrain.LR, 
+                              type = 0,
+                              cost = 0.1)
+
+# Make prediction
+ridge.pred <- predict(ridge.model,xTest.LR)
+ridge.pred
+
+ridge.pred$predictions <- ridge.factor(LR.pred$predictions)
+
+# Display confusion matrix
+ridge.res <- table(ridge.pred$predictions,yTest.LR)
+print(ridge.res)
+
+
+
+
+```
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+```{r}
+
+# Develop a couple of extreme gradient boosting models with different values of parameters. Discus how models differ from each other.
+
+library(xgboost)
+
+xgbData <- cleanData
+xgbData$target <- as.integer(xgbData$target)-1
+
+xgbTrain <- xgbData[1:54776,]
+xgbTest <- xgbData[54777:104782,]
+
+
+```
+
+```{r}
+
+#xgbData$target = NULL
+
+#developing gbm model from training data
+
+xgtrain.data = as.matrix(xgbTrain[,1:103])
+xgtrain.label = xgbTrain$target
+xgtest.data = as.matrix(xgbTest[,1:103])
+xgtest.label = xgbTest$target
+
+
+```
+
+```{r}
+
+# Transform the two data sets into xgb.Matrix
+xgb.train = xgb.DMatrix(data= xgtrain.data,label= xgtrain.label)
+xgb.test = xgb.DMatrix(data=xgtest.data,label= xgtest.label)
+
+
+num_class = length(unique(xgtrain.label))
+num_class
+params = list(
+  booster="gbtree",
+  eta=0.7,
+  max_depth=6,
+  gamma=0.5,
+  subsample=0.75,
+  colsample_bytree=1,
+  objective="multi:softprob",
+  eval_metric="mlogloss",
+  num_class=num_class
+)
+
+
+
+```
+
+```{r}
+
+library(caret)
+
+# Train the XGBoost classifer
+xgb.fit = xgb.train(
+  params=params,
+  data=xgb.train,
+  nrounds=10000,
+  early_stopping_rounds=10,
+  watchlist=list(val1=xgb.train,val2=xgb.test),
+  verbose=0
+)
+
+
+# Review the final model and results
+xgb.fit
+
+#Training and test error plot
+
+err_plot = data.frame(xgb.fit$evaluation_log)
+plot(err_plot$iter,err_plot$val1_mlogloss, col = 'blue')
+lines(err_plot$iter,err_plot$val2_mlogloss, col = 'red')
+
+
+# Predict outcomes with the test data
+xgb.pred = predict(xgb.fit,xgtest.data,reshape=T)
+#xgb.pred
+
+#Confusion Matrix on test data
+matrix.pred = matrix(xgb.pred,nrow = num_class, ncol = length(xgb.pred)/num_class) %>%
+  t() %>% 
+  data_frame() %>%
+  mutate(label= xgtest.label, max_prob = max.col(.,"last")-1)
+
+XGconfMatrix <- table(prediction = matrix.pred$max_prob, Actual = matrix.pred$label)
+
+
+
+
+#aucPerf_gbm_us <-performance(pred_gbm_us, "tpr", "fpr")
+#plot(aucPerf_gbm_us)
+#abline(a=0, b= 1)
+
+```
+
+
+
+```{r}
+
+# **Parameter Tuning for XGBoost, with tuning parameters like learning Rate (eta), max_depth, and Gamma.**
+
+
+library(Metrics)
+library(measures)
+library(AUC)
+
+best.eta <- NA
+best.depth <- NA
+best.gamma <- NA
+
+highest.XGBmacroF1 <- 0
+for (learning in c(0.09,0.005, 0.5)) {
+  for (depth in c(3,5,7,10)) {
+    for (gam in c(1,1.5,2)){
+    XGB.best <- xgboost(data=xgb.train,label= xgtrain.label,
+                        eta = learning, max_depth = depth,
+                        objective = "multi:softprob",
+                        nrounds = 10000,
+                        num_class = num_class, verbose = 0)
+    gc()
+
+    pred.best <- predict(XGB.best,xgb.train, outputmargin = TRUE)
+    
+    matrix.pred.best = matrix(pred.best,nrow = num_class, ncol = length(pred.best)/num_class) %>%
+  t() %>% 
+  data_frame() %>%
+  mutate(label= xgtrain.label, max_prob = max.col(.,"last")-1)
+
+XGconfMatrix.best <- table(prediction = matrix.pred.best$max_prob,
+                           Actual = matrix.pred.best$label)
+
+n = sum(XGconfMatrix.best) # number of instances
+ nc = nrow(XGconfMatrix.best) # number of classes
+ diag = diag(XGconfMatrix.best) # number of correctly classified instances per class 
+ rowsums = apply(XGconfMatrix.best, 1, sum) # number of instances per class
+ colsums = apply(XGconfMatrix.best, 2, sum) # number of predictions per class
+ p = rowsums / n # distribution of instances over the actual classes
+ q = colsums / n # distribution of instances over the predicted classes    
+precision.best = diag / colsums  
+recall.best <- diag / rowsums 
+f1.best = 2 * precision.best * recall.best / (precision.best + recall.best) 
+macroF1.best = mean(f1.best)
+   # recall.best <- rmse(xgtest.label, as.numeric(pred.best) )
+    
+     print(paste ("learning Rate =", learning, "max_depth = ", depth, "gamma =", gam," Macro F-score =", macroF1.best ))
+    
+    if(macroF1.best > highest.XGBmacroF1){
+      highest.XGBmacroF1 <- macroF1.best
+      best.eta <- learning
+      best.depth <- depth
+      best.gamma <- gam
+    }
+    
+    }
+    
+  }
+}
+
+cat("Best eta:",best.eta,"\n")
+cat("Best depth:",best.depth,"\n")
+cat("Best gamma:",best.gamma,"\n")
+cat("Best Macro F-score:",highest.XGBmacroF1,"\n")
+
+```
+
+These are the results from running models with different values of parameteres, learning rate (eta), depth (max_depth) and Gamma. The model is being evaluated on F-score, which is a combinition of Precision and recall, as both the evaluation measures are of imporatance to us. The best values of parameters obtained are:  
+Best eta: 0.5   
+Best depth: 10  
+Best gamma: 1   
+Best Macro F-score: 0.9055549   
+
+```{r}
+#Retraining the model with best value of parameters and obtain the performance on test data
+
+tuned.params = list(
+  booster="gbtree",
+  eta=0.5,
+  max_depth=10,
+  gamma=1,
+  subsample=0.75,
+  colsample_bytree=1,
+  objective="multi:softprob",
+  eval_metric="mlogloss",
+  num_class=num_class
+)
+
+
+# Train the XGBoost classifer
+xgb.tunedModel = xgb.train(
+  params = tuned.params,
+  data=xgb.train,
+  nrounds=10000,
+  early_stopping_rounds=10,
+  watchlist=list(valT1=xgb.train,valT2=xgb.test),
+  verbose=0
+)
+
+
+# Review the final model and results
+xgb.tunedModel
+
+#Training and test error plot
+
+err_plot.tuned <- data.frame(xgb.tunedModel$evaluation_log)
+plot(err_plot.tuned$iter,err_plot.tuned$valT1_mlogloss, col = 'blue')
+lines(err_plot.tuned$iter,err_plot.tuned$valT2_mlogloss, col = 'red')
+
+```
+
+```{r}
+
+# Predict outcomes with the test data
+xgb.pred.tuned = predict(xgb.tunedModel,xgtest.data,reshape=T)
+#xgb.pred
+
+#Confusion Matrix on test data
+matrix.pred.tuned = matrix(xgb.pred.tuned,nrow = num_class, ncol = length(xgb.pred.tuned)/num_class) %>%
+  t() %>% 
+  data_frame() %>%
+  mutate(label= xgtest.label, max_prob = max.col(.,"last")-1)
+
+XGconfMatrix.tuned <- table(prediction = matrix.pred.tuned$max_prob,
+                           Actual = matrix.pred.tuned$label)
+
+n.tuned = sum(XGconfMatrix.tuned) # number of instances
+ nc.tuned = nrow(XGconfMatrix.tuned) # number of classes
+ diag.tuned = diag(XGconfMatrix.tuned) # number of correctly classified instances per class 
+ rowsums.tuned = apply(XGconfMatrix.tuned, 1, sum) # number of instances per class
+ colsums.tuned = apply(XGconfMatrix.tuned, 2, sum) # number of predictions per class
+ p.tuned = rowsums.tuned / n.tuned # distribution of instances over the actual classes
+ q.tuned = colsums.tuned / n.tuned # distribution of instances over the predicted classes    
+precision.tuned = diag / colsums  
+recall.tuned <- diag / rowsums 
+f1.tuned = 2 * precision.tuned * recall.tuned / (precision.tuned + recall.tuned) 
+
+macroPrecision.tuned = mean(precision.tuned)
+macroRecall.tuned = mean(recall.tuned)
+macroF1.tuned = mean(f1.tuned)
+
+cat("Macro Precision on Test data",macroPrecision.tuned,"\n")
+cat("Macro Recall on Test data",macroRecall.tuned,"\n")
+cat("Macro F-score on Test data",macroF1.tuned,"\n")
+
+
+```
+
+
+
+```{r}
+# One-vs-All Confusion Matrix:
+
+oneVsAll = lapply(1 : nc.tuned,
+                  function(i){
+                  v = c(XGconfMatrix.tuned[i,i],
+                    rowsums.tuned[i] - XGconfMatrix.tuned[i,i],
+                    colsums.tuned[i] - XGconfMatrix.tuned[i,i],
+                    n-rowsums.tuned[i] - colsums.tuned[i] + XGconfMatrix.tuned[i,i]);
+                        return(matrix(v, nrow = 2, byrow = T))})
+
+
+```
+
+
+
+
+```{r}
+
+# Summing up the values of these matrices results in one confusion matrix and allows us to compute weighted metrics such as average accuracy and micro-averaged metrics.  
+
+summed.tuned = matrix(0, nrow = 2, ncol = 2)
+ for(i in 1 : nc.tuned){summed.tuned = summed.tuned + oneVsAll[[i]]}
+
+
+# The micro-averaged precision, recall, and F-1 can be computed from the matrix above. Compared to unweighted macro-averaging, micro-averaging favors classes with a larger number of instances. Because the sum of the one-vs-all matrices is a symmetric matrix, the micro-averaged precision, recall, and F-1 wil be the same.
+
+micro_prf = (diag(summed.tuned) / apply(summed.tuned,1, sum))[1]
+
+cat("Micro Precision/Recall/F-Score on Test data",micro_prf,"\n")
+
+
+```
+
+
